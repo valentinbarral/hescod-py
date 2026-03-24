@@ -290,7 +290,7 @@ class MainWindow(QMainWindow):
             lay.addWidget(cb, r, c + 1)
 
             b = QPushButton("i")
-            b.setFixedWidth(24)
+            b.setFixedSize(28, 28)
             b.clicked.connect(lambda _, idx=i: self.on_show_constellation(idx))
             lay.addWidget(b, r, c)
 
@@ -640,11 +640,13 @@ class MainWindow(QMainWindow):
         self._ensure_coding_selected()
         self._update_coding_option_widgets()
 
-    def _selected_coding_mode_text(self) -> str:
-        if self.codingMethod[0]:
+    def _selected_coding_mode_text(self, coding: Optional[Sequence[bool]] = None) -> str:
+        cm = list(coding) if coding is not None else self.codingMethod
+
+        if cm[0]:
             return "Sin Codificacion"
 
-        if self.codingMethod[1]:
+        if cm[1]:
             l_vals = [2, 3, 4]
             selected = [l_vals[i] for i, v in enumerate(self.infoCoding[0]) if bool(v)]
             if len(selected) == 1:
@@ -653,11 +655,11 @@ class MainWindow(QMainWindow):
                 return f"Hamming (L={','.join(str(x) for x in selected)})"
             return "Hamming"
 
-        if self.codingMethod[2]:
+        if cm[2]:
             gens = [int(x) for x in self.infoCoding[1]]
             return f"Convolucional (g={gens})"
 
-        if self.codingMethod[3]:
+        if cm[3]:
             rates = ["1/2", "2/3", "3/4", "5/6"]
             selected = [rates[i] for i, v in enumerate(self.infoCoding[2]) if bool(v)]
             if len(selected) == 1:
@@ -666,7 +668,7 @@ class MainWindow(QMainWindow):
                 return f"LDPC ({','.join(selected)})"
             return "LDPC"
 
-        if self.codingMethod[4]:
+        if cm[4]:
             l_vals = [3, 4, 5]
             selected = [l_vals[i] for i, v in enumerate(self.infoCoding[3]) if bool(v)]
             k_rs = int(self.infoCoding[4])
@@ -721,15 +723,24 @@ class MainWindow(QMainWindow):
         self.numAntenas[idx] = v
 
     def on_info(self) -> None:
+        selected_codes = [i for i, v in enumerate(self.codingMethod) if bool(v)]
+        coding_for_info = list(self.codingMethod)
+
+        if len(selected_codes) == 2 and 0 in selected_codes:
+            other = [i for i in selected_codes if i != 0]
+            if len(other) == 1:
+                coding_for_info = [False] * 5
+                coding_for_info[other[0]] = True
+
         s1 = sum(self.modulations)
-        s2 = sum(self.codingMethod)
+        s2 = sum(coding_for_info)
         s3 = sum(self.channelType)
         s4 = sum(self.numAntenas)
 
-        cond1 = self.codingMethod[1] and sum(self.infoCoding[0]) < 1
-        cond2 = self.codingMethod[2] and len(self.infoCoding[1]) == 0
-        cond3 = self.codingMethod[3] and sum(self.infoCoding[2]) < 1
-        cond5 = self.codingMethod[4] and sum(self.infoCoding[3]) != 1
+        cond1 = coding_for_info[1] and sum(self.infoCoding[0]) < 1
+        cond2 = coding_for_info[2] and len(self.infoCoding[1]) == 0
+        cond3 = coding_for_info[3] and sum(self.infoCoding[2]) < 1
+        cond5 = coding_for_info[4] and sum(self.infoCoding[3]) != 1
 
         if not (s1 == 1 and s2 == 1 and s3 == 1):
             self._warn("Debe seleccionar un esquema completo (solo uno) para ver sus detalles")
@@ -743,13 +754,13 @@ class MainWindow(QMainWindow):
             self._warn("Revisar parametros de codificacion para escoger UN unico esquema valido")
             return
 
-        if self.codingMethod[3] and not ldpc_matrices_available():
+        if coding_for_info[3] and not ldpc_matrices_available():
             self._warn("Falta el archivo ieee802_16e_matrices.mat para usar LDPC")
             return
 
         capIni, capFin = getCapacity(self.channelType, self.minSNR, self.maxSNR, self.numAntenas)
         Eb, minDist, tasa, rate, w = getParameters(
-            self.modulations, self.codingMethod, self.infoCoding, self.numAntenas
+            self.modulations, coding_for_info, self.infoCoding, self.numAntenas
         )
 
         self.txt_cap.setPlainText(f"Min: {capIni:2.3f} b/s     Max: {capFin:2.3f} b/s")
@@ -757,7 +768,7 @@ class MainWindow(QMainWindow):
         self.txt_dist.setPlainText(f"{minDist:d}")
         self.txt_tasa.setPlainText(f"{tasa:2.2f} b/s")
         self.txt_rate.setPlainText(f"{rate:2.2f}")
-        self.lbl_info_mode.setText(f"Modo: {self._selected_coding_mode_text()}")
+        self.lbl_info_mode.setText(f"Modo: {self._selected_coding_mode_text(coding_for_info)}")
 
         if w:
             self._warn("El codigo elegido es catastrofico")

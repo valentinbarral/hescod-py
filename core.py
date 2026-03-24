@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
@@ -14,6 +15,8 @@ NIVELES = [2, 4, 8, 4, 8, 16, 16, 64, 256]
 CODE_TYPES = ["NoCoding", "Hamming", "Conv.", "LDPC", "RS"]
 CHANNEL_TYPES = ["AWGN", "Rayleigh", "MIMO", "Vehicular"]
 ANT_OPTIONS = [2, 4, 8]
+LDPC_MAX_ITERS = int(os.getenv("HESCOD_LDPC_MAX_ITERS", "8"))
+LDPC_MAX_BITS_BER = int(os.getenv("HESCOD_LDPC_MAX_BITS_BER", "20000"))
 
 
 @dataclass
@@ -886,7 +889,7 @@ def decodingOp(demodulatedBits: np.ndarray, params: TxParams, sizePadding: int) 
         out = np.zeros(nb * k, dtype=np.uint8)
         for i in range(nb):
             block = llr[i * n : (i + 1) * n]
-            out[i * k : (i + 1) * k] = _ldpc_decode_block(block, prep)
+            out[i * k : (i + 1) * k] = _ldpc_decode_block(block, prep, max_iter=LDPC_MAX_ITERS)
         est = out
 
     else:  # RS
@@ -997,6 +1000,8 @@ def calcular_ber(
     symbols_out = np.array([], dtype=complex)
 
     source = sourceBits.astype(np.uint8).ravel()
+    if params.codeType == "LDPC" and source.size > LDPC_MAX_BITS_BER:
+        source = source[:LDPC_MAX_BITS_BER]
     enc, rate, size1 = encodingOp(source, params)
     modsym, k, symbols, size2 = modulate(enc, params)
     symbols_out = symbols
@@ -1192,6 +1197,8 @@ def simulate_system(
             raise InterruptedError("Simulation cancelled")
 
         status = f"Simulando {idx}/{len(params_all)}: {build_legend(p)}"
+        if p.codeType == "LDPC" and sourceBits.size > LDPC_MAX_BITS_BER:
+            status += f" (muestreo {LDPC_MAX_BITS_BER} bits)"
 
         def _step(inc: int = 1) -> None:
             nonlocal done_steps
