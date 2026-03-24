@@ -17,6 +17,7 @@ CHANNEL_TYPES = ["AWGN", "Rayleigh", "MIMO", "Vehicular"]
 ANT_OPTIONS = [2, 4, 8]
 LDPC_MAX_ITERS = int(os.getenv("HESCOD_LDPC_MAX_ITERS", "8"))
 LDPC_MAX_BITS_BER = int(os.getenv("HESCOD_LDPC_MAX_BITS_BER", "20000"))
+RS_MAX_ML_CODEWORDS = int(os.getenv("HESCOD_RS_MAX_ML_CODEWORDS", "65536"))
 
 
 @dataclass
@@ -623,6 +624,62 @@ class ReedSolomon:
         self.gf_size = 2**m
         self.exp, self.log = self._build_tables()
         self.gen = self._generator_poly(self.nsym)
+        self._ml_msgs: Optional[np.ndarray] = None
+        self._ml_code: Optional[np.ndarray] = None
+        self._syn_table_t2: Optional[Dict[Tuple[int, ...], List[Tuple[int, int]]]] = None
+        if (self.gf_size**self.k) <= RS_MAX_ML_CODEWORDS:
+            self._build_ml_table()
+        elif self.nsym // 2 <= 2:
+            self._build_t2_syndrome_table()
+
+    def _build_ml_table(self) -> None:
+        # For GF(2^3) the full codebook is tiny and enables robust decoding.
+        nmsg = self.gf_size**self.k
+        msgs = np.zeros((nmsg, self.k), dtype=np.uint8)
+        for i in range(nmsg):
+            x = i
+            for p in range(self.k - 1, -1, -1):
+                msgs[i, p] = x % self.gf_size
+                x //= self.gf_size
+
+        code = np.zeros((nmsg, self.n), dtype=np.uint8)
+        for i in range(nmsg):
+            code[i] = np.array(self.encode(msgs[i].tolist()), dtype=np.uint8)
+
+        self._ml_msgs = msgs
+        self._ml_code = code
+
+    def _build_t2_syndrome_table(self) -> None:
+        t = self.nsym // 2
+        if t > 2:
+            return
+
+        table: Dict[Tuple[int, ...], List[Tuple[int, int]]] = {}
+
+        # Zero-error syndrome.
+        table[tuple([0] * self.nsym)] = []
+
+        # Weight-1 errors.
+        for p1 in range(self.n):
+            for e1 in range(1, self.gf_size):
+                err = [0] * self.n
+                err[p1] = e1
+                syn = tuple(self.syndromes(err))
+                table[syn] = [(p1, e1)]
+
+        if t == 2:
+            # Weight-2 errors.
+            for p1 in range(self.n - 1):
+                for p2 in range(p1 + 1, self.n):
+                    for e1 in range(1, self.gf_size):
+                        for e2 in range(1, self.gf_size):
+                            err = [0] * self.n
+                            err[p1] = e1
+                            err[p2] = e2
+                            syn = tuple(self.syndromes(err))
+                            table[syn] = [(p1, e1), (p2, e2)]
+
+        self._syn_table_t2 = table
 
     def _build_tables(self) -> Tuple[np.ndarray, np.ndarray]:
         exp = np.zeros(2 * (self.gf_size - 1), dtype=np.int32)
@@ -743,7 +800,7 @@ class ReedSolomon:
 
     def _find_error_evaluator(self, synd: Sequence[int], err_loc: Sequence[int]) -> List[int]:
         # (S(x) * Lambda(x)) mod x^(nsym)
-        synd_poly = [1] + list(synd)
+        synd_poly = list(synd)
         prod = self.poly_mul(synd_poly, err_loc)
         return prod[: self.nsym]
 
@@ -784,6 +841,23 @@ class ReedSolomon:
         if len(cw) != self.n:
             raise ValueError("RS codeword has wrong length")
         cw_list = [int(x) for x in cw]
+
+        if self._ml_code is not None and self._ml_msgs is not None:
+            cw_arr = np.array(cw_list, dtype=np.uint8).reshape(1, -1)
+            d = np.count_nonzero(self._ml_code != cw_arr, axis=1)
+            best = int(np.argmin(d))
+            return self._ml_msgs[best].astype(np.int64).tolist()
+
+        if self._syn_table_t2 is not None:
+            syn = tuple(self.syndromes(cw_list))
+            corr = self._syn_table_t2.get(syn)
+            if corr is not None:
+                out = cw_list.copy()
+                for p, e in corr:
+                    out[p] ^= int(e)
+                if max(self.syndromes(out), default=0) == 0:
+                    return out[: self.k]
+
         synd = self.syndromes(cw_list)
         if max(synd, default=0) == 0:
             return cw_list[: self.k]
@@ -1025,14 +1099,21 @@ def calcular_ber(
         ncomp = min(source.size, est.size)
         if ncomp == 0:
             ber[j] = 1.0
+            err_count = ncomp
         else:
-            ber[j] = float(np.mean(source[:ncomp] != est[:ncomp]))
+            err_count = int(np.count_nonzero(source[:ncomp] != est[:ncomp]))
+            if err_count == 0:
+                # On log-scale BER plots, 0 produces a vertical drop to -inf.
+                # Use a finite plotting lower bound when no errors are observed.
+                ber[j] = 0.5 / float(ncomp)
+            else:
+                ber[j] = float(err_count / ncomp)
 
         if showConst:
             m_hist.append(modsym)
             r_hist.append(recv)
 
-        if ber[j] < 1e-7 and not showConst:
+        if (err_count == 0 or ber[j] < 1e-7) and not showConst:
             ber = ber[: j + 1]
             if progress_step is not None:
                 progress_step(1)
