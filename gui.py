@@ -1055,31 +1055,36 @@ class MainWindow(QMainWindow):
         ind = np.array(data["ind"]).reshape(-1)
         ber = np.array(data["ber"])
         rates_raw = data["rates"].reshape(-1)
-        rates = [str(r[0]) if isinstance(r, np.ndarray) else str(r) for r in rates_raw]
+        rates: List[str] = []
+        for r in rates_raw:
+            if isinstance(r, np.ndarray):
+                rv = r.reshape(-1)
+                rates.append(str(rv[0]) if rv.size else "?")
+            else:
+                rates.append(str(r))
         num_niveles = np.array(data["numNiveles"]).reshape(-1).astype(int)
 
         fig, ax = plt.subplots(figsize=(11, 7))
-        ax.plot(ind, ber.T, linewidth=2)
+        lines = ax.plot(ind, ber.T, linewidth=2)
         ax.set_ylabel("BER", fontsize=12)
         ax.set_xlabel("Tasa Tx. (bits/s/Hz)", fontsize=12)
         ax.grid(True)
 
-        labels = ["0 dB", "2 dB", "5 dB", "8 dB", "10 dB", "15 dB"]
-        posX = [2.25, 2.25, 2.25, 2.75, 2.75, 4.25]
-        posY = [0.303, 0.253, 0.175, 0.11, 0.047, 0.04]
-        for x, y, t in zip(posX, posY, labels):
-            ax.text(x, y, t, fontsize=10, fontweight="bold")
+        snr_labels = ["0 dB", "2 dB", "5 dB", "8 dB", "10 dB", "15 dB"]
+        curve_labels = snr_labels[: len(lines)]
+        if len(curve_labels) < len(lines):
+            for i in range(len(curve_labels), len(lines)):
+                curve_labels.append(f"Curva {i + 1}")
+        ax.legend(lines, curve_labels)
 
+        xlabels: List[str] = []
         for x, m, r in zip(ind, num_niveles, rates):
             mod = "QAM" if m >= 9 else "PSK"
-            ax.annotate(
-                f"{m}-{mod}/LDPC {r}",
-                xy=(x, 0.01),
-                xytext=(x - 0.35, 0.018),
-                fontsize=8,
-                color=(0.6, 0.0, 0.1),
-                arrowprops={"arrowstyle": "-", "color": "gray", "lw": 0.6},
-            )
+            xlabels.append(f"{x:g}\n{m}-{mod}\nLDPC {r}")
+
+        if ind.size == len(xlabels):
+            ax.set_xticks(ind)
+            ax.set_xticklabels(xlabels, fontsize=8)
 
         ax.set_title("Codificacion Adaptativa", fontsize=14, fontweight="bold")
         fig.tight_layout()
