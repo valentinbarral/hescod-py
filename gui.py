@@ -226,8 +226,12 @@ class MainWindow(QMainWindow):
         splitter = QSplitter(Qt.Horizontal)
         main.addWidget(splitter, 1)
 
+        left_panel = QWidget()
+        left_col = QVBoxLayout(left_panel)
         self.canvas = MplCanvas(width=6.0, height=4.2)
-        splitter.addWidget(self.canvas)
+        left_col.addWidget(self.canvas, 1)
+        left_col.addWidget(self._build_info_group())
+        splitter.addWidget(left_panel)
 
         right_panel = QWidget()
         right_col = QVBoxLayout(right_panel)
@@ -235,7 +239,6 @@ class MainWindow(QMainWindow):
         right_col.addWidget(self._build_mod_group())
         right_col.addWidget(self._build_coding_group())
         right_col.addWidget(self._build_channel_group())
-        right_col.addWidget(self._build_info_group())
         right_col.addStretch(1)
         splitter.addWidget(right_panel)
 
