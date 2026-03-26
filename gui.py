@@ -9,6 +9,7 @@ from matplotlib.figure import Figure
 from matplotlib import pyplot as plt
 from PyQt5.QtCore import QObject, Qt, QThread, pyqtSignal
 from PyQt5.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
     QFileDialog,
@@ -845,14 +846,14 @@ class MainWindow(QMainWindow):
         self.btn_sim.setEnabled(False)
         self.btn_adapt.setEnabled(False)
 
-        self._progress_dialog = QProgressDialog("Iniciando simulacion...", "Cancelar", 0, 100, self)
+        self._progress_dialog = QProgressDialog("Iniciando simulacion...", "Cancelar", 0, 0, self)
         self._progress_dialog.setWindowTitle("Simulando")
         self._progress_dialog.setWindowModality(Qt.WindowModal)
-        self._progress_dialog.setMinimumDuration(0)
-        self._progress_dialog.setAutoClose(False)
-        self._progress_dialog.setAutoReset(False)
+        self._progress_dialog.setMinimumDuration(250)
+        self._progress_dialog.setAutoClose(True)
+        self._progress_dialog.setAutoReset(True)
         self._progress_dialog.canceled.connect(self._cancel_running_simulation)
-        self._progress_dialog.show()
+        self._progress_dialog.open()
 
         self._sim_thread = QThread(self)
         self._sim_worker = SimulationWorker(cfg)
@@ -877,6 +878,21 @@ class MainWindow(QMainWindow):
         if self._progress_dialog is not None:
             self._progress_dialog.setLabelText("Cancelando simulacion...")
 
+    def _close_progress_dialog(self) -> None:
+        dialog = self._progress_dialog
+        if dialog is None:
+            return
+        self._progress_dialog = None
+        try:
+            dialog.canceled.disconnect(self._cancel_running_simulation)
+        except Exception:
+            pass
+        try:
+            dialog.close()
+            dialog.deleteLater()
+        except RuntimeError:
+            pass
+
     def _on_simulation_progress(self, done: int, total: int, message: str) -> None:
         dialog = self._progress_dialog
         if dialog is None:
@@ -884,17 +900,24 @@ class MainWindow(QMainWindow):
         safe_total = max(1, int(total))
         safe_done = max(0, min(int(done), safe_total))
         try:
-            dialog.setMaximum(safe_total)
+            if dialog.maximum() <= 0:
+                dialog.setRange(0, safe_total)
+            else:
+                dialog.setMaximum(safe_total)
             dialog.setValue(safe_done)
             dialog.setLabelText(message)
         except (RuntimeError, AttributeError):
             return
 
     def _on_simulation_finished(self, results: Sequence[dict], is_image: bool) -> None:
-        if self._progress_dialog is not None:
-            self._progress_dialog.setValue(self._progress_dialog.maximum())
-            self._progress_dialog.close()
-            self._progress_dialog = None
+        dialog = self._progress_dialog
+        if dialog is not None:
+            try:
+                dialog.setLabelText("Finalizando...")
+                dialog.setValue(dialog.maximum())
+            except RuntimeError:
+                pass
+        self._close_progress_dialog()
 
         self.btn_sim.setEnabled(True)
         self.btn_adapt.setEnabled(True)
@@ -917,18 +940,14 @@ class MainWindow(QMainWindow):
                     )
 
     def _on_simulation_failed(self, error_message: str) -> None:
-        if self._progress_dialog is not None:
-            self._progress_dialog.close()
-            self._progress_dialog = None
+        self._close_progress_dialog()
 
         self.btn_sim.setEnabled(True)
         self.btn_adapt.setEnabled(True)
         self._warn(f"Error durante la simulacion: {error_message}")
 
     def _on_simulation_cancelled(self) -> None:
-        if self._progress_dialog is not None:
-            self._progress_dialog.close()
-            self._progress_dialog = None
+        self._close_progress_dialog()
 
         self.btn_sim.setEnabled(True)
         self.btn_adapt.setEnabled(True)
