@@ -18,6 +18,7 @@ ANT_OPTIONS = [2, 4, 8]
 LDPC_MAX_ITERS = int(os.getenv("HESCOD_LDPC_MAX_ITERS", "8"))
 LDPC_MAX_BITS_BER = int(os.getenv("HESCOD_LDPC_MAX_BITS_BER", "20000"))
 RS_MAX_ML_CODEWORDS = int(os.getenv("HESCOD_RS_MAX_ML_CODEWORDS", "65536"))
+CONV_MAX_BITS_BER = int(os.getenv("HESCOD_CONV_MAX_BITS_BER", "300000"))
 
 
 @dataclass
@@ -417,6 +418,21 @@ def _conv_decode(bits: np.ndarray, gens: Sequence[int]) -> np.ndarray:
             ns_bits = reg[:-1] if mem else np.zeros(0, dtype=np.uint8)
             next_state[s, u] = _bits_to_state(ns_bits)
 
+    # Precompute compact branch symbols and bit-error lookup.
+    out_sym = np.zeros((n_states, 2), dtype=np.uint8)
+    for s in range(n_states):
+        for u in [0, 1]:
+            v = 0
+            for b in out_bits[s, u]:
+                v = (v << 1) | int(b)
+            out_sym[s, u] = v
+
+    max_sym = 1 << n_out
+    ham = np.zeros((max_sym, max_sym), dtype=np.uint8)
+    for a in range(max_sym):
+        for b in range(max_sym):
+            ham[a, b] = int((a ^ b).bit_count())
+
     inf = 1e9
     metrics = np.full(n_states, inf, dtype=float)
     metrics[0] = 0.0
@@ -424,16 +440,18 @@ def _conv_decode(bits: np.ndarray, gens: Sequence[int]) -> np.ndarray:
     prev_u = np.zeros((n_steps, n_states), dtype=np.uint8)
 
     for t in range(n_steps):
+        yv = 0
+        for b in rx[t]:
+            yv = (yv << 1) | int(b)
+
         new_metrics = np.full(n_states, inf, dtype=float)
-        y = rx[t]
         for s in range(n_states):
-            if metrics[s] >= inf:
-                continue
             base = metrics[s]
+            if base >= inf:
+                continue
             for u in [0, 1]:
-                ns = next_state[s, u]
-                dist = np.count_nonzero(y != out_bits[s, u])
-                cand = base + dist
+                ns = int(next_state[s, u])
+                cand = base + float(ham[yv, int(out_sym[s, u])])
                 if cand < new_metrics[ns]:
                     new_metrics[ns] = cand
                     prev_state[t, ns] = s
@@ -1076,6 +1094,8 @@ def calcular_ber(
     source = sourceBits.astype(np.uint8).ravel()
     if params.codeType == "LDPC" and source.size > LDPC_MAX_BITS_BER:
         source = source[:LDPC_MAX_BITS_BER]
+    if params.codeType == "Conv." and source.size > CONV_MAX_BITS_BER:
+        source = source[:CONV_MAX_BITS_BER]
     enc, rate, size1 = encodingOp(source, params)
     modsym, k, symbols, size2 = modulate(enc, params)
     symbols_out = symbols
@@ -1280,6 +1300,10 @@ def simulate_system(
         status = f"Simulando {idx}/{len(params_all)}: {build_legend(p)}"
         if p.codeType == "LDPC" and sourceBits.size > LDPC_MAX_BITS_BER:
             status += f" (muestreo {LDPC_MAX_BITS_BER} bits)"
+        if p.codeType == "Conv." and sourceBits.size > CONV_MAX_BITS_BER:
+            status += f" (muestreo {CONV_MAX_BITS_BER} bits)"
+        if progress_callback is not None:
+            progress_callback(done_steps, total_steps, status)
 
         def _step(inc: int = 1) -> None:
             nonlocal done_steps
