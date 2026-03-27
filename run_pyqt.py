@@ -40,7 +40,13 @@ user_site = site.getusersitepackages()
 if isinstance(user_site, str) and user_site in sys.path:
     sys.path.remove(user_site)
 
-from PyQt5.QtWidgets import QApplication
+try:
+    from PyQt5.QtWidgets import QApplication
+except ImportError:
+    try:
+        from PyQt6.QtWidgets import QApplication
+    except ImportError:
+        from PySide6.QtWidgets import QApplication
 
 try:
     from pyqt_app.gui import MainWindow
@@ -52,7 +58,9 @@ def main() -> int:
     app = QApplication(sys.argv)
     w = MainWindow()
     w.show()
-    return app.exec_()
+    if hasattr(app, "exec_"):
+        return app.exec_()
+    return app.exec()
 
 
 if __name__ == "__main__":

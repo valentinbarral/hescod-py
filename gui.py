@@ -4,32 +4,87 @@ from pathlib import Path
 from typing import Any, List, Optional, Sequence, Tuple
 
 import numpy as np
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from matplotlib import pyplot as plt
-from PyQt5.QtCore import QObject, Qt, QThread, pyqtSignal
-from PyQt5.QtWidgets import (
-    QApplication,
-    QCheckBox,
-    QComboBox,
-    QFileDialog,
-    QFormLayout,
-    QGridLayout,
-    QGroupBox,
-    QHBoxLayout,
-    QLabel,
-    QLineEdit,
-    QMainWindow,
-    QMessageBox,
-    QProgressDialog,
-    QPushButton,
-    QSplitter,
-    QSpinBox,
-    QTabWidget,
-    QTextEdit,
-    QVBoxLayout,
-    QWidget,
-)
+try:
+    from PyQt5.QtCore import QObject, Qt, QThread, pyqtSignal
+    from PyQt5.QtWidgets import (
+        QApplication,
+        QCheckBox,
+        QComboBox,
+        QFileDialog,
+        QFormLayout,
+        QGridLayout,
+        QGroupBox,
+        QHBoxLayout,
+        QLabel,
+        QLineEdit,
+        QMainWindow,
+        QMessageBox,
+        QProgressDialog,
+        QPushButton,
+        QSplitter,
+        QSpinBox,
+        QTabWidget,
+        QTextEdit,
+        QVBoxLayout,
+        QWidget,
+    )
+except ImportError:
+    try:
+        from PyQt6.QtCore import QObject, Qt, QThread, pyqtSignal
+        from PyQt6.QtWidgets import (
+            QApplication,
+            QCheckBox,
+            QComboBox,
+            QFileDialog,
+            QFormLayout,
+            QGridLayout,
+            QGroupBox,
+            QHBoxLayout,
+            QLabel,
+            QLineEdit,
+            QMainWindow,
+            QMessageBox,
+            QProgressDialog,
+            QPushButton,
+            QSplitter,
+            QSpinBox,
+            QTabWidget,
+            QTextEdit,
+            QVBoxLayout,
+            QWidget,
+        )
+    except ImportError:
+        from PySide6.QtCore import QObject, Qt, QThread, Signal as pyqtSignal
+        from PySide6.QtWidgets import (
+            QApplication,
+            QCheckBox,
+            QComboBox,
+            QFileDialog,
+            QFormLayout,
+            QGridLayout,
+            QGroupBox,
+            QHBoxLayout,
+            QLabel,
+            QLineEdit,
+            QMainWindow,
+            QMessageBox,
+            QProgressDialog,
+            QPushButton,
+            QSplitter,
+            QSpinBox,
+            QTabWidget,
+            QTextEdit,
+            QVBoxLayout,
+            QWidget,
+        )
+
+try:
+    QT_CHECKED = int(Qt.Checked)
+except AttributeError:
+    QT_CHECKED = int(Qt.CheckState.Checked)
 from scipy.io import loadmat
 
 try:
@@ -616,7 +671,7 @@ class MainWindow(QMainWindow):
         self.order = "bin" if value == "Natural" else "gray"
 
     def on_mod_changed(self, idx: int, state: int) -> None:
-        self.modulations[idx] = state == Qt.Checked
+        self.modulations[idx] = state == QT_CHECKED
 
     def on_show_constellation(self, idx: int) -> None:
         mods = ["pam", "pam", "pam", "psk", "psk", "psk", "qam", "qam", "qam"]
@@ -640,7 +695,7 @@ class MainWindow(QMainWindow):
         self.canvas.draw()
 
     def on_code_changed(self, idx: int, state: int) -> None:
-        self.codingMethod[idx] = state == Qt.Checked
+        self.codingMethod[idx] = state == QT_CHECKED
         self._ensure_coding_selected()
         self._update_coding_option_widgets()
 
@@ -685,16 +740,16 @@ class MainWindow(QMainWindow):
         return "-"
 
     def on_show_const_changed(self, state: int) -> None:
-        self.show_const_received = state == Qt.Checked
+        self.show_const_received = state == QT_CHECKED
 
     def on_hamming_l_changed(self, idx: int, state: int) -> None:
-        self.infoCoding[0][idx] = state == Qt.Checked
+        self.infoCoding[0][idx] = state == QT_CHECKED
 
     def on_ldpc_rate_changed(self, idx: int, state: int) -> None:
-        self.infoCoding[2][idx] = state == Qt.Checked
+        self.infoCoding[2][idx] = state == QT_CHECKED
 
     def on_rs_l_changed(self, idx: int, state: int) -> None:
-        self.infoCoding[3][idx] = state == Qt.Checked
+        self.infoCoding[3][idx] = state == QT_CHECKED
 
     def on_rs_k_changed(self, value: str) -> None:
         v = value.strip()
@@ -718,12 +773,12 @@ class MainWindow(QMainWindow):
         self.maxSNR = value
 
     def on_channel_changed(self, idx: int, state: int) -> None:
-        self.channelType[idx] = state == Qt.Checked
+        self.channelType[idx] = state == QT_CHECKED
         if idx == 2:
             self._update_mimo_option_widgets()
 
     def on_ant_changed(self, idx: int, state: int) -> None:
-        v = state == Qt.Checked
+        v = state == QT_CHECKED
         self.numAntenas[idx] = v
 
     def on_info(self) -> None:
