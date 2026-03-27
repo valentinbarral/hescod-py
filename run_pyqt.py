@@ -60,9 +60,9 @@ def main() -> int:
     app = QApplication(sys.argv)
     w = MainWindow()
     w.show()
-    if hasattr(app, "exec_"):
-        return app.exec_()
-    return app.exec()
+    if hasattr(app, "exec"):
+        return app.exec()
+    return app.exec_()
 
 
 if __name__ == "__main__":
