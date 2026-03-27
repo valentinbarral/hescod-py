@@ -1,6 +1,16 @@
 version = 1
 revision = 1
 requires-python = ">=3.12"
+resolution-markers = [
+    "platform_machine != 'AMD64' or sys_platform != 'win32'",
+    "platform_machine == 'AMD64' and sys_platform == 'win32'",
+]
+required-markers = [
+    "platform_machine == 'x86_64' and sys_platform == 'linux'",
+    "platform_machine == 'x86_64' and sys_platform == 'darwin'",
+    "platform_machine == 'arm64' and sys_platform == 'darwin'",
+    "platform_machine == 'AMD64' and sys_platform == 'win32'",
+]
 
 [[package]]
 name = "contourpy"
@@ -126,7 +136,8 @@ dependencies = [
     { name = "matplotlib" },
     { name = "numpy" },
     { name = "pillow" },
-    { name = "pyqt5" },
+    { name = "pyqt5", version = "5.15.2", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine == 'AMD64' and sys_platform == 'win32'" },
+    { name = "pyqt5", version = "5.15.11", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine != 'AMD64' or sys_platform != 'win32'" },
     { name = "scipy" },
 ]
 
@@ -384,11 +395,26 @@ wheels = [
 
 [[package]]
 name = "pyqt5"
+version = "5.15.2"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "platform_machine == 'AMD64' and sys_platform == 'win32'",
+]
+dependencies = [
+    { name = "pyqt5-sip", marker = "platform_machine == 'AMD64' and sys_platform == 'win32'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/28/6c/640e3f5c734c296a7193079a86842a789edb7988dca39eab44579088a1d1/PyQt5-5.15.2.tar.gz", hash = "sha256:372b08dc9321d1201e4690182697c5e7ffb2e0770e6b4a45519025134b12e4fc", size = 3265445 }
+
+[[package]]
+name = "pyqt5"
 version = "5.15.11"
 source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "platform_machine != 'AMD64' or sys_platform != 'win32'",
+]
 dependencies = [
-    { name = "pyqt5-qt5" },
-    { name = "pyqt5-sip" },
+    { name = "pyqt5-qt5", marker = "platform_machine != 'AMD64' or sys_platform != 'win32'" },
+    { name = "pyqt5-sip", marker = "platform_machine != 'AMD64' or sys_platform != 'win32'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/0e/07/c9ed0bd428df6f87183fca565a79fee19fa7c88c7f00a7f011ab4379e77a/PyQt5-5.15.11.tar.gz", hash = "sha256:fda45743ebb4a27b4b1a51c6d8ef455c4c1b5d610c90d2934c7802b5c1557c52", size = 3216775 }
 wheels = [
