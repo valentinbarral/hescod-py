@@ -49,9 +49,11 @@ except ImportError:
         from PySide6.QtWidgets import QApplication
 
 try:
-    from pyqt_app.gui import MainWindow
-except ModuleNotFoundError:
     from gui import MainWindow
+except ModuleNotFoundError as exc:
+    if exc.name != "gui":
+        raise
+    from pyqt_app.gui import MainWindow
 
 
 def main() -> int:
