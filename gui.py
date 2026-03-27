@@ -81,10 +81,31 @@ except ImportError:
             QWidget,
         )
 
+if hasattr(Qt, "Checked"):
+    _qt_checked = Qt.Checked
+elif hasattr(Qt, "CheckState") and hasattr(Qt.CheckState, "Checked"):
+    _qt_checked = Qt.CheckState.Checked
+else:
+    _qt_checked = 2
+
 try:
-    QT_CHECKED = int(Qt.Checked)
-except AttributeError:
-    QT_CHECKED = int(Qt.CheckState.Checked)
+    QT_CHECKED = int(_qt_checked)
+except (TypeError, ValueError):
+    QT_CHECKED = int(getattr(_qt_checked, "value", 2))
+
+if hasattr(Qt, "Horizontal"):
+    QT_HORIZONTAL = Qt.Horizontal
+elif hasattr(Qt, "Orientation") and hasattr(Qt.Orientation, "Horizontal"):
+    QT_HORIZONTAL = Qt.Orientation.Horizontal
+else:
+    QT_HORIZONTAL = 1
+
+if hasattr(Qt, "WindowModal"):
+    QT_WINDOW_MODAL = Qt.WindowModal
+elif hasattr(Qt, "WindowModality") and hasattr(Qt.WindowModality, "WindowModal"):
+    QT_WINDOW_MODAL = Qt.WindowModality.WindowModal
+else:
+    QT_WINDOW_MODAL = 1
 from scipy.io import loadmat
 
 try:
@@ -279,7 +300,7 @@ class MainWindow(QMainWindow):
         top_buttons.addWidget(self.btn_adapt)
         top_buttons.addStretch(1)
 
-        splitter = QSplitter(Qt.Horizontal)
+        splitter = QSplitter(QT_HORIZONTAL)
         main.addWidget(splitter, 1)
 
         left_panel = QWidget()
@@ -903,7 +924,7 @@ class MainWindow(QMainWindow):
 
         self._progress_dialog = QProgressDialog("Iniciando simulacion...", "Cancelar", 0, 0, self)
         self._progress_dialog.setWindowTitle("Simulando")
-        self._progress_dialog.setWindowModality(Qt.WindowModal)
+        self._progress_dialog.setWindowModality(QT_WINDOW_MODAL)
         self._progress_dialog.setMinimumDuration(250)
         self._progress_dialog.setAutoClose(True)
         self._progress_dialog.setAutoReset(True)
