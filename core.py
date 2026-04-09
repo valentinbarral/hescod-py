@@ -1205,13 +1205,16 @@ def getParameters(
     ants = [ANT_OPTIONS[i] for i, x in enumerate(numAntennas) if bool(x)]
     n_ant = ants[0] if ants else None
 
+    k_mod = float(np.log2(m))
     if mod == "pam":
-        Eb = (m * m - 1) / 3.0
+        Es = (m * m - 1) / 3.0
     elif mod == "psk":
-        Eb = 1.0
+        Es = 1.0
     else:
         symbols = constellation_symbols("qam", m, "gray")
-        Eb = float(np.mean(np.abs(symbols) ** 2))
+        Es = float(np.mean(np.abs(symbols) ** 2))
+
+    Eb = Es / k_mod
 
     ind2 = [i for i, x in enumerate(codingMethod) if bool(x)]
     if not ind2:
