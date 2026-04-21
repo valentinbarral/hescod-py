@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import faulthandler
+import traceback
 from pathlib import Path
 from typing import Any, List, Optional, Sequence, Tuple
 
@@ -7,6 +9,7 @@ import numpy as np
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from matplotlib import pyplot as plt
+
 try:
     from PyQt5.QtCore import QObject, Qt, QThread, pyqtSignal
     from PyQt5.QtWidgets import (
@@ -116,6 +119,7 @@ try:
         getParameters,
         ldpc_matrices_available,
         load_image_bits,
+        set_debug_logging,
         simulate_image,
         simulate_system,
     )
@@ -127,6 +131,7 @@ except ImportError:
         getParameters,
         ldpc_matrices_available,
         load_image_bits,
+        set_debug_logging,
         simulate_image,
         simulate_system,
     )
@@ -200,6 +205,18 @@ class SimulationWorker(QObject):
         except InterruptedError:
             self.cancelled.emit()
         except Exception as exc:
+            if self.cfg.get("debug"):
+                log_path = Path(__file__).resolve().parent / "hescod_debug.log"
+                try:
+                    with log_path.open("a", encoding="utf-8") as f:
+                        f.write("[GUI] Simulation worker failed\n")
+                        f.write(f"[GUI] Exception: {type(exc).__name__}: {exc}\n")
+                        f.write(traceback.format_exc())
+                        f.write("\n")
+                except Exception:
+                    pass
+                self.failed.emit(f"{exc}\n\nRevise el log: {log_path}")
+                return
             self.failed.emit(str(exc))
 
 
@@ -210,7 +227,17 @@ class MainWindow(QMainWindow):
         self.resize(1400, 900)
 
         # Sensible defaults so simulation can run immediately.
-        self.modulations = [False, False, False, True, False, False, False, False, False]  # QPSK
+        self.modulations = [
+            False,
+            False,
+            False,
+            True,
+            False,
+            False,
+            False,
+            False,
+            False,
+        ]  # QPSK
         self.order = "gray"
         self.numBits = 1_000_000
         self.sourceBits = np.array([], dtype=np.uint8)
@@ -229,9 +256,11 @@ class MainWindow(QMainWindow):
         self.show_const_received = False
         self.channelType = [True, False, False, False]
         self.numAntenas = [False, False, False]
+        self.debug_enabled = False
         self._sim_thread: Optional[QThread] = None
         self._sim_worker: Optional[SimulationWorker] = None
         self._progress_dialog: Optional[QProgressDialog] = None
+        self._fault_log_file: Optional[Any] = None
 
         self._build_ui()
         self._show_logo()
@@ -279,8 +308,11 @@ class MainWindow(QMainWindow):
         ]:
             cb.setChecked(bool(val))
 
+        self.cb_debug.setChecked(bool(self.debug_enabled))
+
         self._update_coding_option_widgets()
         self._update_mimo_option_widgets()
+        self._apply_debug_runtime_state()
 
         self.on_generate_bits()
 
@@ -294,10 +326,13 @@ class MainWindow(QMainWindow):
 
         self.btn_sim = QPushButton("Simular Transmision")
         self.btn_adapt = QPushButton("Codificacion Adaptativa")
+        self.cb_debug = QCheckBox("Debug")
         self.btn_sim.clicked.connect(self.on_simulate)
         self.btn_adapt.clicked.connect(self.on_plot_adapt)
+        self.cb_debug.stateChanged.connect(self.on_debug_changed)
         top_buttons.addWidget(self.btn_sim)
         top_buttons.addWidget(self.btn_adapt)
+        top_buttons.addWidget(self.cb_debug)
         top_buttons.addStretch(1)
 
         splitter = QSplitter(QT_HORIZONTAL)
@@ -364,7 +399,9 @@ class MainWindow(QMainWindow):
             r = i % 3
             c = (i // 3) * 2
             cb = QCheckBox(lab)
-            cb.stateChanged.connect(lambda state, idx=i: self.on_mod_changed(idx, state))
+            cb.stateChanged.connect(
+                lambda state, idx=i: self.on_mod_changed(idx, state)
+            )
             cb.setChecked(bool(self.modulations[i]))
             self.cb_mod.append(cb)
             lay.addWidget(cb, r, c + 1)
@@ -540,7 +577,13 @@ class MainWindow(QMainWindow):
         self.txt_rate = QTextEdit()
         self.txt_tasa = QTextEdit()
 
-        for t in [self.txt_cap, self.txt_eb, self.txt_dist, self.txt_rate, self.txt_tasa]:
+        for t in [
+            self.txt_cap,
+            self.txt_eb,
+            self.txt_dist,
+            self.txt_rate,
+            self.txt_tasa,
+        ]:
             t.setFixedHeight(32)
             t.setReadOnly(True)
 
@@ -570,7 +613,9 @@ class MainWindow(QMainWindow):
             self.canvas.ax.set_title("HESCOD")
             self.canvas.ax.axis("off")
         else:
-            self.canvas.ax.text(0.5, 0.5, "HESCOD", ha="center", va="center", fontsize=22)
+            self.canvas.ax.text(
+                0.5, 0.5, "HESCOD", ha="center", va="center", fontsize=22
+            )
             self.canvas.ax.axis("off")
         self.canvas.draw()
 
@@ -660,13 +705,17 @@ class MainWindow(QMainWindow):
     def on_generate_bits(self) -> None:
         parsed = self._parse_num_bits()
         if parsed is None:
-            self._warn("Ingrese un numero valido de bits (ej: 1000000 o 1e6), entre 1 y 5000000")
+            self._warn(
+                "Ingrese un numero valido de bits (ej: 1000000 o 1e6), entre 1 y 5000000"
+            )
             return
         self.numBits = parsed
         self.sourceBits = np.random.randint(0, 2, self.numBits, dtype=np.uint8)
         self.imagen = False
         self.image_shape = None
-        self.lbl_bits_status.setText(f"Bits generados: {self.sourceBits.size:,}".replace(",", "."))
+        self.lbl_bits_status.setText(
+            f"Bits generados: {self.sourceBits.size:,}".replace(",", ".")
+        )
 
     def on_load_image(self) -> None:
         file_name, _ = QFileDialog.getOpenFileName(
@@ -681,7 +730,9 @@ class MainWindow(QMainWindow):
         self.sourceBits = bits
         self.image_shape = shp
         self.imagen = True
-        self.lbl_bits_status.setText(f"Bits cargados desde imagen: {self.sourceBits.size:,}".replace(",", "."))
+        self.lbl_bits_status.setText(
+            f"Bits cargados desde imagen: {self.sourceBits.size:,}".replace(",", ".")
+        )
         self.canvas.ax.clear()
         self.canvas.ax.imshow(y, cmap="gray", vmin=0, vmax=255)
         self.canvas.ax.set_title("Imagen fuente (Y)")
@@ -705,10 +756,16 @@ class MainWindow(QMainWindow):
         ax.clear()
         ax.plot(symbols.real, symbols.imag, "r*", markersize=10)
         for i, s in enumerate(symbols):
-            ax.text(float(np.real(s)) + 0.08, float(np.imag(s)) + 0.08, f"s{i}", fontsize=9)
+            ax.text(
+                float(np.real(s)) + 0.08, float(np.imag(s)) + 0.08, f"s{i}", fontsize=9
+            )
         ax.axhline(0.0, color="k", linewidth=1.2)
         ax.axvline(0.0, color="k", linewidth=1.2)
-        lim = max(1.5, float(np.max(np.abs(np.real(symbols)))) + 1.0, float(np.max(np.abs(np.imag(symbols)))) + 1.0)
+        lim = max(
+            1.5,
+            float(np.max(np.abs(np.real(symbols)))) + 1.0,
+            float(np.max(np.abs(np.imag(symbols)))) + 1.0,
+        )
         ax.set_xlim(-lim, lim)
         ax.set_ylim(-lim, lim)
         ax.grid(True)
@@ -720,7 +777,9 @@ class MainWindow(QMainWindow):
         self._ensure_coding_selected()
         self._update_coding_option_widgets()
 
-    def _selected_coding_mode_text(self, coding: Optional[Sequence[bool]] = None) -> str:
+    def _selected_coding_mode_text(
+        self, coding: Optional[Sequence[bool]] = None
+    ) -> str:
         cm = list(coding) if coding is not None else self.codingMethod
 
         if cm[0]:
@@ -802,6 +861,40 @@ class MainWindow(QMainWindow):
         v = state == QT_CHECKED
         self.numAntenas[idx] = v
 
+    def _apply_debug_runtime_state(self) -> None:
+        debug_path = Path(__file__).resolve().parent / "hescod_debug.log"
+        fault_path = Path(__file__).resolve().parent / "hescod_fault.log"
+        set_debug_logging(self.debug_enabled, debug_path)
+
+        if self.debug_enabled:
+            if self._fault_log_file is None or self._fault_log_file.closed:
+                try:
+                    fault_path.parent.mkdir(parents=True, exist_ok=True)
+                    self._fault_log_file = fault_path.open("a", encoding="utf-8")
+                except Exception:
+                    self._fault_log_file = None
+            if self._fault_log_file is not None:
+                try:
+                    faulthandler.enable(file=self._fault_log_file, all_threads=True)
+                except Exception:
+                    pass
+            return
+
+        try:
+            faulthandler.disable()
+        except Exception:
+            pass
+        if self._fault_log_file is not None:
+            try:
+                self._fault_log_file.close()
+            except Exception:
+                pass
+            self._fault_log_file = None
+
+    def on_debug_changed(self, state: int) -> None:
+        self.debug_enabled = state == QT_CHECKED
+        self._apply_debug_runtime_state()
+
     def on_info(self) -> None:
         selected_codes = [i for i, v in enumerate(self.codingMethod) if bool(v)]
         coding_for_info = list(self.codingMethod)
@@ -823,7 +916,9 @@ class MainWindow(QMainWindow):
         cond5 = coding_for_info[4] and sum(self.infoCoding[3]) != 1
 
         if not (s1 == 1 and s2 == 1 and s3 == 1):
-            self._warn("Debe seleccionar un esquema completo (solo uno) para ver sus detalles")
+            self._warn(
+                "Debe seleccionar un esquema completo (solo uno) para ver sus detalles"
+            )
             return
 
         if self.channelType[2] and s4 != 1:
@@ -831,14 +926,18 @@ class MainWindow(QMainWindow):
             return
 
         if cond1 or cond2 or cond3 or cond5:
-            self._warn("Revisar parametros de codificacion para escoger UN unico esquema valido")
+            self._warn(
+                "Revisar parametros de codificacion para escoger UN unico esquema valido"
+            )
             return
 
         if coding_for_info[3] and not ldpc_matrices_available():
             self._warn("Falta el archivo ieee802_16e_matrices.mat para usar LDPC")
             return
 
-        capIni, capFin = getCapacity(self.channelType, self.minSNR, self.maxSNR, self.numAntenas)
+        capIni, capFin = getCapacity(
+            self.channelType, self.minSNR, self.maxSNR, self.numAntenas
+        )
         Eb, minDist, tasa, rate, w = getParameters(
             self.modulations, coding_for_info, self.infoCoding, self.numAntenas
         )
@@ -848,7 +947,9 @@ class MainWindow(QMainWindow):
         self.txt_dist.setPlainText(f"{minDist:d}")
         self.txt_tasa.setPlainText(f"{tasa:2.2f} b/s")
         self.txt_rate.setPlainText(f"{rate:2.2f}")
-        self.lbl_info_mode.setText(f"Modo: {self._selected_coding_mode_text(coding_for_info)}")
+        self.lbl_info_mode.setText(
+            f"Modo: {self._selected_coding_mode_text(coding_for_info)}"
+        )
 
         if w:
             self._warn("El codigo elegido es catastrofico")
@@ -864,7 +965,9 @@ class MainWindow(QMainWindow):
             self._warn("Debe generar primero el bitstream a transmitir")
             return False
         if sum(self.modulations) < 1:
-            self._warn("Debe seleccionar primero algun esquema para modular la informacion")
+            self._warn(
+                "Debe seleccionar primero algun esquema para modular la informacion"
+            )
             return False
         if cond1 or cond2 or cond3 or cond5:
             self._warn("Error en los parametros de la etapa de codificacion")
@@ -910,6 +1013,7 @@ class MainWindow(QMainWindow):
             "numAntennas": list(self.numAntenas),
             "SNRdB": snr,
             "showConst": bool(self.show_const_received),
+            "debug": bool(self.debug_enabled),
         }
 
         if cfg["imagen"] and cfg["image_shape"] is None:
@@ -922,7 +1026,9 @@ class MainWindow(QMainWindow):
         self.btn_sim.setEnabled(False)
         self.btn_adapt.setEnabled(False)
 
-        self._progress_dialog = QProgressDialog("Iniciando simulacion...", "Cancelar", 0, 0, self)
+        self._progress_dialog = QProgressDialog(
+            "Iniciando simulacion...", "Cancelar", 0, 0, self
+        )
         self._progress_dialog.setWindowTitle("Simulando")
         self._progress_dialog.setWindowModality(QT_WINDOW_MODAL)
         self._progress_dialog.setMinimumDuration(250)
@@ -1074,10 +1180,20 @@ class MainWindow(QMainWindow):
                 if rj.size == 0:
                     continue
                 if np.isrealobj(rj):
-                    ax.plot(rj.real, np.zeros_like(rj.real), "*", color=colors[j], linestyle="None")
+                    ax.plot(
+                        rj.real,
+                        np.zeros_like(rj.real),
+                        "*",
+                        color=colors[j],
+                        linestyle="None",
+                    )
                 else:
                     ax.plot(rj.real, rj.imag, "*", color=colors[j], linestyle="None")
-                limit = max(limit, float(np.max(np.abs(np.real(rj)))), float(np.max(np.abs(np.imag(rj)))))
+                limit = max(
+                    limit,
+                    float(np.max(np.abs(np.real(rj)))),
+                    float(np.max(np.abs(np.imag(rj)))),
+                )
 
             ax.plot(symbols.real, symbols.imag, "k*", markersize=8)
             lim = np.ceil(limit) + 1
@@ -1086,9 +1202,16 @@ class MainWindow(QMainWindow):
             ax.grid(True)
 
             if mod == "psk":
-                angles = np.linspace(0, 2 * np.pi, niveles, endpoint=False) + np.pi / niveles
+                angles = (
+                    np.linspace(0, 2 * np.pi, niveles, endpoint=False) + np.pi / niveles
+                )
                 for ang in angles:
-                    ax.plot([0, 5 * np.cos(ang)], [0, 5 * np.sin(ang)], color=(1.0, 0.5, 0.0), linewidth=1.5)
+                    ax.plot(
+                        [0, 5 * np.cos(ang)],
+                        [0, 5 * np.sin(ang)],
+                        color=(1.0, 0.5, 0.0),
+                        linewidth=1.5,
+                    )
             else:
                 mx = max(1.0, float(np.max(np.abs(symbols.real))))
                 for x in np.arange(-mx + 1, mx + 0.1, 2):
@@ -1097,7 +1220,9 @@ class MainWindow(QMainWindow):
                     for y in np.arange(-mx + 1, mx + 0.1, 2):
                         ax.axhline(y=y, color=(1.0, 0.5, 0.0), linewidth=1.2)
 
-        fig.suptitle("Constelacion de Simbolos Recibidos", fontsize=14, fontweight="bold")
+        fig.suptitle(
+            "Constelacion de Simbolos Recibidos", fontsize=14, fontweight="bold"
+        )
         fig.tight_layout()
         fig.show()
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import os
 from pathlib import Path
+import traceback
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
@@ -19,6 +20,67 @@ LDPC_MAX_ITERS = int(os.getenv("HESCOD_LDPC_MAX_ITERS", "8"))
 LDPC_MAX_BITS_BER = int(os.getenv("HESCOD_LDPC_MAX_BITS_BER", "20000"))
 RS_MAX_ML_CODEWORDS = int(os.getenv("HESCOD_RS_MAX_ML_CODEWORDS", "65536"))
 CONV_MAX_BITS_BER = int(os.getenv("HESCOD_CONV_MAX_BITS_BER", "300000"))
+DEBUG_LOG_PATH = Path(
+    os.getenv("HESCOD_DEBUG_LOG", Path(__file__).resolve().parent / "hescod_debug.log")
+)
+DEBUG_LOG_ENABLED = False
+
+
+def set_debug_logging(enabled: bool, log_path: Optional[Path] = None) -> None:
+    global DEBUG_LOG_ENABLED, DEBUG_LOG_PATH
+    DEBUG_LOG_ENABLED = bool(enabled)
+    if log_path is not None:
+        DEBUG_LOG_PATH = Path(log_path)
+
+
+def _debug_log(message: str) -> None:
+    if not DEBUG_LOG_ENABLED:
+        return
+    try:
+        DEBUG_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with DEBUG_LOG_PATH.open("a", encoding="utf-8") as f:
+            f.write(message.rstrip() + "\n")
+    except Exception:
+        pass
+
+
+def _solve_mod2(left: np.ndarray, right: np.ndarray) -> np.ndarray:
+    left_u = np.array(left, dtype=np.uint8, copy=True) % 2
+    if left_u.ndim != 2 or left_u.shape[0] != left_u.shape[1]:
+        raise ValueError("Left matrix must be square for mod-2 solve")
+
+    right_u = np.array(right, dtype=np.uint8, copy=True) % 2
+    squeeze = False
+    if right_u.ndim == 1:
+        right_u = right_u.reshape(-1, 1)
+        squeeze = True
+
+    n = left_u.shape[0]
+    if right_u.shape[0] != n:
+        raise ValueError("Right-hand side has incompatible shape for mod-2 solve")
+
+    aug = np.concatenate([left_u, right_u], axis=1)
+    n_rhs = right_u.shape[1]
+
+    for col in range(n):
+        pivot = None
+        for row in range(col, n):
+            if aug[row, col]:
+                pivot = row
+                break
+        if pivot is None:
+            raise ValueError("Singular matrix in mod-2 solve")
+        if pivot != col:
+            aug[[col, pivot]] = aug[[pivot, col]]
+
+        for row in range(n):
+            if row != col and aug[row, col]:
+                aug[row, col:] ^= aug[col, col:]
+
+    sol = aug[:, n : n + n_rhs] % 2
+    if squeeze:
+        return sol.reshape(-1)
+    return sol
 
 
 @dataclass
@@ -56,8 +118,15 @@ def ldpc_matrices_available() -> bool:
 def load_ldpc_bases() -> Dict[str, np.ndarray]:
     if not ldpc_matrices_available():
         return {}
-    data = loadmat(_mat_path())
-    keys = ["ieee802_16e_1_2", "ieee802_16e_2_3A", "ieee802_16e_3_4A", "ieee802_16e_5_6"]
+    mat_path = _mat_path()
+    _debug_log(f"[LDPC] Loading matrices from: {mat_path}")
+    data = loadmat(mat_path)
+    keys = [
+        "ieee802_16e_1_2",
+        "ieee802_16e_2_3A",
+        "ieee802_16e_3_4A",
+        "ieee802_16e_5_6",
+    ]
     out: Dict[str, np.ndarray] = {}
     for k in keys:
         if k in data:
@@ -66,7 +135,12 @@ def load_ldpc_bases() -> Dict[str, np.ndarray]:
 
 
 _LDPC_BASES = load_ldpc_bases()
-_LDPC_KEYS = ["ieee802_16e_1_2", "ieee802_16e_2_3A", "ieee802_16e_3_4A", "ieee802_16e_5_6"]
+_LDPC_KEYS = [
+    "ieee802_16e_1_2",
+    "ieee802_16e_2_3A",
+    "ieee802_16e_3_4A",
+    "ieee802_16e_5_6",
+]
 _LDPC_RATE_NAMES = ["1/2", "2/3", "3/4", "5/6"]
 _LDPC_BASE_ORDER = [
     _LDPC_BASES.get(_LDPC_KEYS[0]),
@@ -242,7 +316,9 @@ def constellation_symbols(mod: str, niveles: int, order: str) -> np.ndarray:
     raise ValueError(f"Unsupported modulation: {mod}")
 
 
-def modulate(encodedBits: np.ndarray, params: TxParams) -> Tuple[np.ndarray, int, np.ndarray, int]:
+def modulate(
+    encodedBits: np.ndarray, params: TxParams
+) -> Tuple[np.ndarray, int, np.ndarray, int]:
     symbols = constellation_symbols(params.mod, params.niveles, params.order)
     k = int(np.log2(params.niveles))
 
@@ -263,7 +339,9 @@ def _hard_demod(receivedSymbols: np.ndarray, symbols: np.ndarray, k: int) -> np.
     return _int_to_bits(pos, k).reshape(-1)
 
 
-def _soft_llr_demod(receivedSymbols: np.ndarray, symbols: np.ndarray, k: int, no: float) -> np.ndarray:
+def _soft_llr_demod(
+    receivedSymbols: np.ndarray, symbols: np.ndarray, k: int, no: float
+) -> np.ndarray:
     bit_labels = _int_to_bits(np.arange(len(symbols)), k)
     sigma2 = max(float(no) / 2.0, 1e-12)
     out = np.zeros(receivedSymbols.size * k, dtype=float)
@@ -279,7 +357,9 @@ def _soft_llr_demod(receivedSymbols: np.ndarray, symbols: np.ndarray, k: int, no
     return out
 
 
-def demodulate(receivedSymbols: np.ndarray, params: TxParams, symbols: np.ndarray, sizePadding: int) -> np.ndarray:
+def demodulate(
+    receivedSymbols: np.ndarray, params: TxParams, symbols: np.ndarray, sizePadding: int
+) -> np.ndarray:
     k = int(np.log2(params.niveles))
 
     if params.codeType == "LDPC":
@@ -413,7 +493,9 @@ def _conv_decode(bits: np.ndarray, gens: Sequence[int]) -> np.ndarray:
     for s in range(n_states):
         s_bits = _state_to_bits(s, mem)
         for u in [0, 1]:
-            reg = np.concatenate([[u], s_bits]) if mem else np.array([u], dtype=np.uint8)
+            reg = (
+                np.concatenate([[u], s_bits]) if mem else np.array([u], dtype=np.uint8)
+            )
             out_bits[s, u] = (taps @ reg) % 2
             ns_bits = reg[:-1] if mem else np.zeros(0, dtype=np.uint8)
             next_state[s, u] = _bits_to_state(ns_bits)
@@ -480,7 +562,9 @@ def genHexp(hb: np.ndarray, z: int) -> csr_matrix:
         for j in range(nc):
             v = int(hb[i, j])
             if v >= 0:
-                H[i * z : (i + 1) * z, j * z : (j + 1) * z] = np.roll(eye, shift=v, axis=1)
+                H[i * z : (i + 1) * z, j * z : (j + 1) * z] = np.roll(
+                    eye, shift=v, axis=1
+                )
 
     return csr_matrix(H)
 
@@ -493,54 +577,64 @@ def _ldpc_prepare(hb: np.ndarray, z: int = 80) -> Dict[str, Any]:
     if key in _LDPC_CACHE:
         return _LDPC_CACHE[key]
 
-    Hs = genHexp(hb, z)
-    H = Hs.toarray().astype(np.uint8)
-    m, n = H.shape
-    k = n - m
+    try:
+        _debug_log(f"[LDPC] Preparing matrix: hb_shape={hb.shape}, z={z}")
+        Hs = genHexp(hb, z)
+        _debug_log(f"[LDPC] Expanded sparse matrix shape: {Hs.shape}")
+        H = Hs.toarray().astype(np.uint8)
+        m, n = H.shape
+        k = n - m
 
-    ir = m - z
-    ic = k + z
+        ir = m - z
+        ic = k + z
 
-    A = H[:ir, :k]
-    B = H[:ir, k:ic]
-    T = H[:ir, ic:]
-    C = H[ir:, :k]
-    E = H[ir:, ic:]
+        A = H[:ir, :k]
+        B = H[:ir, k:ic]
+        T = H[:ir, ic:]
+        C = H[ir:, :k]
+        E = H[ir:, ic:]
 
-    T_float = T.astype(float)
-    # Mirrors MATLAB right-division + left-division behavior.
-    ET1 = _mod2_real(E.astype(float) @ np.linalg.inv(T_float))
+        _debug_log(
+            f"[LDPC] Dense blocks: A={A.shape}, B={B.shape}, T={T.shape}, C={C.shape}, E={E.shape}"
+        )
+        ET1 = _solve_mod2(T.T, E.T).T.astype(np.uint8)
 
-    rows, cols = Hs.nonzero()
-    n_edges = len(rows)
-    row_edges: List[List[int]] = [[] for _ in range(m)]
-    col_edges: List[List[int]] = [[] for _ in range(n)]
-    for e, (r, c) in enumerate(zip(rows.tolist(), cols.tolist())):
-        row_edges[r].append(e)
-        col_edges[c].append(e)
+        rows, cols = Hs.nonzero()
+        n_edges = len(rows)
+        row_edges: List[List[int]] = [[] for _ in range(m)]
+        col_edges: List[List[int]] = [[] for _ in range(n)]
+        for e, (r, c) in enumerate(zip(rows.tolist(), cols.tolist())):
+            row_edges[r].append(e)
+            col_edges[c].append(e)
 
-    cache = {
-        "H_sparse": Hs,
-        "H_dense": H,
-        "m": m,
-        "n": n,
-        "k": k,
-        "z": z,
-        "ir": ir,
-        "A": A,
-        "B": B,
-        "T": T,
-        "C": C,
-        "E": E,
-        "ET1": ET1,
-        "rows": rows.astype(np.int32),
-        "cols": cols.astype(np.int32),
-        "row_edges": row_edges,
-        "col_edges": col_edges,
-        "n_edges": n_edges,
-    }
-    _LDPC_CACHE[key] = cache
-    return cache
+        cache = {
+            "H_sparse": Hs,
+            "H_dense": H,
+            "m": m,
+            "n": n,
+            "k": k,
+            "z": z,
+            "ir": ir,
+            "A": A,
+            "B": B,
+            "T": T,
+            "C": C,
+            "E": E,
+            "ET1": ET1,
+            "rows": rows.astype(np.int32),
+            "cols": cols.astype(np.int32),
+            "row_edges": row_edges,
+            "col_edges": col_edges,
+            "n_edges": n_edges,
+        }
+        _LDPC_CACHE[key] = cache
+        _debug_log(f"[LDPC] Preparation complete: n={n}, k={k}, edges={n_edges}")
+        return cache
+    except Exception as exc:
+        _debug_log("[LDPC] Preparation failed")
+        _debug_log(f"[LDPC] Exception: {type(exc).__name__}: {exc}")
+        _debug_log(traceback.format_exc())
+        raise
 
 
 def _ldpc_encode_block(u: np.ndarray, prep: Dict[str, Any]) -> np.ndarray:
@@ -550,16 +644,23 @@ def _ldpc_encode_block(u: np.ndarray, prep: Dict[str, Any]) -> np.ndarray:
     T = prep["T"]
     ET1 = prep["ET1"]
 
-    au = (A @ u) % 2
-    cu = (C @ u) % 2
-    p1 = (ET1 @ au + cu) % 2
-    Tp2 = (au + (B @ p1) % 2) % 2
-    p2 = _mod2_real(np.linalg.solve(T.astype(float), Tp2.astype(float)))
+    try:
+        au = (A @ u) % 2
+        cu = (C @ u) % 2
+        p1 = (ET1 @ au + cu) % 2
+        Tp2 = (au + (B @ p1) % 2) % 2
+        p2 = _solve_mod2(T, Tp2).astype(np.uint8)
+        return np.concatenate([u, p1.astype(np.uint8), p2]).astype(np.uint8)
+    except Exception as exc:
+        _debug_log("[LDPC] Encode block failed")
+        _debug_log(f"[LDPC] Exception: {type(exc).__name__}: {exc}")
+        _debug_log(traceback.format_exc())
+        raise
 
-    return np.concatenate([u, p1.astype(np.uint8), p2.astype(np.uint8)]).astype(np.uint8)
 
-
-def _ldpc_decode_block(llr: np.ndarray, prep: Dict[str, Any], max_iter: int = 25) -> np.ndarray:
+def _ldpc_decode_block(
+    llr: np.ndarray, prep: Dict[str, Any], max_iter: int = 25
+) -> np.ndarray:
     m = prep["m"]
     n = prep["n"]
     k = prep["k"]
@@ -570,55 +671,61 @@ def _ldpc_decode_block(llr: np.ndarray, prep: Dict[str, Any], max_iter: int = 25
     n_edges = prep["n_edges"]
     Hs: csr_matrix = prep["H_sparse"]
 
-    llr = llr.astype(float)
-    Lq = llr[cols].copy()
-    Lr = np.zeros(n_edges, dtype=float)
+    try:
+        llr = llr.astype(float)
+        Lq = llr[cols].copy()
+        Lr = np.zeros(n_edges, dtype=float)
 
-    post = np.zeros(n, dtype=float)
+        post = np.zeros(n, dtype=float)
 
-    for _ in range(max_iter):
-        for r in range(m):
-            eidx = row_edges[r]
-            if not eidx:
-                continue
-            vals = Lq[eidx]
-            signs = np.sign(vals)
-            signs[signs == 0] = 1.0
-            sign_prod = np.prod(signs)
-            av = np.abs(vals)
+        for _ in range(max_iter):
+            for r in range(m):
+                eidx = row_edges[r]
+                if not eidx:
+                    continue
+                vals = Lq[eidx]
+                signs = np.sign(vals)
+                signs[signs == 0] = 1.0
+                sign_prod = np.prod(signs)
+                av = np.abs(vals)
 
-            if len(av) == 1:
-                min1 = 0.0
-                min2 = 0.0
-                argmin = 0
-            else:
-                argmin = int(np.argmin(av))
-                min1 = float(av[argmin])
-                tmp = av.copy()
-                tmp[argmin] = np.inf
-                min2 = float(np.min(tmp))
+                if len(av) == 1:
+                    min1 = 0.0
+                    min2 = 0.0
+                    argmin = 0
+                else:
+                    argmin = int(np.argmin(av))
+                    min1 = float(av[argmin])
+                    tmp = av.copy()
+                    tmp[argmin] = np.inf
+                    min2 = float(np.min(tmp))
 
-            for local_idx, e in enumerate(eidx):
-                msg_sign = sign_prod * signs[local_idx]
-                mag = min2 if local_idx == argmin else min1
-                Lr[e] = msg_sign * mag
+                for local_idx, e in enumerate(eidx):
+                    msg_sign = sign_prod * signs[local_idx]
+                    mag = min2 if local_idx == argmin else min1
+                    Lr[e] = msg_sign * mag
 
-        for c in range(n):
-            eidx = col_edges[c]
-            if not eidx:
-                post[c] = llr[c]
-                continue
-            s = float(np.sum(Lr[eidx]))
-            post[c] = llr[c] + s
-            for e in eidx:
-                Lq[e] = llr[c] + s - Lr[e]
+            for c in range(n):
+                eidx = col_edges[c]
+                if not eidx:
+                    post[c] = llr[c]
+                    continue
+                s = float(np.sum(Lr[eidx]))
+                post[c] = llr[c] + s
+                for e in eidx:
+                    Lq[e] = llr[c] + s - Lr[e]
 
-        hard = (post < 0).astype(np.uint8)
-        syn = (Hs @ hard) % 2
-        if np.count_nonzero(syn) == 0:
-            return hard[:k]
+            hard = (post < 0).astype(np.uint8)
+            syn = (Hs @ hard) % 2
+            if np.count_nonzero(syn) == 0:
+                return hard[:k]
 
-    return (post < 0).astype(np.uint8)[:k]
+        return (post < 0).astype(np.uint8)[:k]
+    except Exception as exc:
+        _debug_log("[LDPC] Decode block failed")
+        _debug_log(f"[LDPC] Exception: {type(exc).__name__}: {exc}")
+        _debug_log(traceback.format_exc())
+        raise
 
 
 _PRIMITIVE_POLY = {
@@ -644,7 +751,9 @@ class ReedSolomon:
         self.gen = self._generator_poly(self.nsym)
         self._ml_msgs: Optional[np.ndarray] = None
         self._ml_code: Optional[np.ndarray] = None
-        self._syn_table_t2: Optional[Dict[Tuple[int, ...], List[Tuple[int, int]]]] = None
+        self._syn_table_t2: Optional[Dict[Tuple[int, ...], List[Tuple[int, int]]]] = (
+            None
+        )
         if (self.gf_size**self.k) <= RS_MAX_ML_CODEWORDS:
             self._build_ml_table()
         elif self.nsym // 2 <= 2:
@@ -816,7 +925,9 @@ class ReedSolomon:
             C.pop()
         return C
 
-    def _find_error_evaluator(self, synd: Sequence[int], err_loc: Sequence[int]) -> List[int]:
+    def _find_error_evaluator(
+        self, synd: Sequence[int], err_loc: Sequence[int]
+    ) -> List[int]:
         # (S(x) * Lambda(x)) mod x^(nsym)
         synd_poly = list(synd)
         prod = self.poly_mul(synd_poly, err_loc)
@@ -832,7 +943,9 @@ class ReedSolomon:
             return None
         return err_pos
 
-    def _correct_errata(self, cw: List[int], synd: Sequence[int], err_pos: Sequence[int]) -> List[int]:
+    def _correct_errata(
+        self, cw: List[int], synd: Sequence[int], err_pos: Sequence[int]
+    ) -> List[int]:
         coef_pos = [len(cw) - 1 - p for p in err_pos]
         err_loc = [1]
         for cp in coef_pos:
@@ -848,7 +961,9 @@ class ReedSolomon:
             err_loc_prime = 1
             for j, Xj in enumerate(X):
                 if i != j:
-                    err_loc_prime = self.gf_mul(err_loc_prime, 1 ^ self.gf_mul(Xi_inv, Xj))
+                    err_loc_prime = self.gf_mul(
+                        err_loc_prime, 1 ^ self.gf_mul(Xi_inv, Xj)
+                    )
             y = self.poly_eval(err_eval[::-1], Xi_inv)
             magnitude = self.gf_div(self.gf_mul(self.gf_pow(Xi, 1), y), err_loc_prime)
             E[err_pos[i]] = magnitude
@@ -903,7 +1018,9 @@ def _rs_codec(m: int, k: int) -> ReedSolomon:
     return _RS_CACHE[key]
 
 
-def encodingOp(sourceBits: np.ndarray, params: TxParams) -> Tuple[np.ndarray, float, int]:
+def encodingOp(
+    sourceBits: np.ndarray, params: TxParams
+) -> Tuple[np.ndarray, float, int]:
     bits = sourceBits.astype(np.uint8).ravel()
     t = params.codeType
     sizePadding = 0
@@ -958,7 +1075,9 @@ def encodingOp(sourceBits: np.ndarray, params: TxParams) -> Tuple[np.ndarray, fl
     return out, float(k_rs / n_rs), sizePadding
 
 
-def decodingOp(demodulatedBits: np.ndarray, params: TxParams, sizePadding: int) -> np.ndarray:
+def decodingOp(
+    demodulatedBits: np.ndarray, params: TxParams, sizePadding: int
+) -> np.ndarray:
     t = params.codeType
 
     if t == "NoCoding":
@@ -981,7 +1100,9 @@ def decodingOp(demodulatedBits: np.ndarray, params: TxParams, sizePadding: int) 
         out = np.zeros(nb * k, dtype=np.uint8)
         for i in range(nb):
             block = llr[i * n : (i + 1) * n]
-            out[i * k : (i + 1) * k] = _ldpc_decode_block(block, prep, max_iter=LDPC_MAX_ITERS)
+            out[i * k : (i + 1) * k] = _ldpc_decode_block(
+                block, prep, max_iter=LDPC_MAX_ITERS
+            )
         est = out
 
     else:  # RS
@@ -1000,7 +1121,11 @@ def decodingOp(demodulatedBits: np.ndarray, params: TxParams, sizePadding: int) 
             msg_symbols = np.array(codec.decode(cw_symbols.tolist()), dtype=np.int64)
             msg_bits = _int_to_bits(msg_symbols, l).reshape(-1)
             out_blocks.append(msg_bits)
-        est = np.concatenate(out_blocks).astype(np.uint8) if out_blocks else np.array([], dtype=np.uint8)
+        est = (
+            np.concatenate(out_blocks).astype(np.uint8)
+            if out_blocks
+            else np.array([], dtype=np.uint8)
+        )
 
     if sizePadding:
         est = est[: est.size - sizePadding]
@@ -1058,7 +1183,7 @@ def channelTx(modulatedSymbols: np.ndarray, no: float, params: TxParams) -> np.n
             )
             rx = tx + noise
 
-            a = (hp.conj().T @ hp + no / 2.0)
+            a = hp.conj().T @ hp + no / 2.0
             filt = (1.0 / a) * hp.conj().T
             out[start:end] = (filt @ rx).reshape(-1)
 
@@ -1287,7 +1412,9 @@ def simulate_system(
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
     cancel_check: Optional[Callable[[], bool]] = None,
 ) -> List[Dict[str, Any]]:
-    params_all = system_parameters(modulations, order, coding, infoCoding, channelType, numAntennas)
+    params_all = system_parameters(
+        modulations, order, coding, infoCoding, channelType, numAntennas
+    )
     out: List[Dict[str, Any]] = []
     thr = 1e-4
     total_steps = max(1, len(params_all) * max(1, len(SNRdB)))
@@ -1396,7 +1523,9 @@ def simulate_image(
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
     cancel_check: Optional[Callable[[], bool]] = None,
 ) -> List[Dict[str, Any]]:
-    params_all = system_parameters(modulations, order, coding, infoCoding, channelType, numAntennas)
+    params_all = system_parameters(
+        modulations, order, coding, infoCoding, channelType, numAntennas
+    )
     snr_vec = np.array(SNRdB, dtype=float)
     out: List[Dict[str, Any]] = []
     total_steps = max(1, len(params_all) * max(1, len(snr_vec)))

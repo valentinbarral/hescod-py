@@ -28,7 +28,9 @@ def _candidate_plugin_paths() -> list[Path]:
     return paths
 
 
-if sys.platform.startswith("linux") and not os.environ.get("QT_QPA_PLATFORM_PLUGIN_PATH"):
+if sys.platform.startswith("linux") and not os.environ.get(
+    "QT_QPA_PLATFORM_PLUGIN_PATH"
+):
     for p in _candidate_plugin_paths():
         if p.exists():
             os.environ["QT_QPA_PLATFORM_PLUGIN_PATH"] = str(p)
@@ -39,7 +41,6 @@ if sys.platform.startswith("linux") and not os.environ.get("QT_QPA_PLATFORM_PLUG
 user_site = site.getusersitepackages()
 if isinstance(user_site, str) and user_site in sys.path:
     sys.path.remove(user_site)
-
 try:
     from PyQt5.QtWidgets import QApplication
 except ImportError:
